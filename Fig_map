@@ -503,37 +503,3 @@ AMU_residue %>%
       barheight = unit(0.5, "cm"),
       barwidth = unit(5, "cm")))
 ggsave("1.png", width = 11, height = 15, dpi = 500)
-
-####* 数据导出 ----
-AMU_residue %>% 
-  pivot_longer(cols = Human:Soil) %>%
-  mutate(
-    sector = case_when(
-      name %in% "Human" ~ "Human health",
-      name %in% c("Animal", "Terrestrial", "Aquatic") ~ 
-        "Animal health and food safety",
-      T ~ "Environment"),
-    sector = factor(sector, levels = c(
-      "Human health", "Animal health and food safety", "Environment")),
-    name = factor(name, levels = c(
-      "Human", "Animal", "Terrestrial", "Aquatic", 
-      "Lake", "WasteWater", "Soil"),
-      labels = c(
-        "Human antibiotic use", 
-        "Animal antibiotic use", 
-        "Antibiotic residues in terrestrial products", 
-        "Antibiotic residues in aquatic products", 
-        "Antibiotic residues in lakes", 
-        "Antibiotic residues in wastewater", 
-        "Antibiotic residues in agricultural soils")),
-    name2 = paste0(sector, ": ", name)) %>% 
-  filter(value) %>%
-  pivot_wider(
-    id_cols = ATC4,
-    names_from = name2,
-    values_from = Antibiotic,
-    values_fill = "None",
-    values_fn = function(x) Hmisc::capitalize(
-      paste(tolower(x), collapse = ", "))) %>% 
-  select(1:2, starts_with(c("Human", "Animal", "Environment"))) %>% 
-  write.csv("各领域抗菌药物监测具体种类.csv", row.names = F)
