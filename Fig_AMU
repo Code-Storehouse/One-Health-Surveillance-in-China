@@ -1,0 +1,124 @@
+# 2 AMU监测项目重叠 ----
+####* 数据读取 ----
+AMU_residue2 <- 
+  read_xlsx("AMU监测.xlsx", sheet = "Paired") %>% 
+  select(-1, -3) %>% 
+  rename(Antibiotic = name) %>% 
+  mutate(
+    MIA = factor(MIA, levels = c(
+      "Authorized for use in humans only",
+      "HPCIA", "CIA", "HIA", "IA",
+      "Not authorized in humans",
+      "Not in the list"), labels = c(
+        "Authorized for use in humans only",
+        "Highest priority critically important antimicrobial (HPCIA)",
+        "Critically important antimicrobial (CIA)", 
+        "Highly important antimicrobial (HIA)", 
+        "Important antimicrobial (IA)",
+        "Not authorized in humans",
+        "Not in the list")),
+    across(
+      c(Human:Soil), ~ if_else(is.na(.x), F, T))) %>% 
+  arrange(MIA, ATCcode, across(Human:Soil), Antibiotic)
+
+####* 绘图 ----
+fig_AMU <- 
+AMU_residue2 %>% 
+  # 从上到下所有sector相同时合并为sector组
+  mutate(
+    across(Human:Soil, as.numeric),
+    sector_id = do.call(paste0, across(Human:Soil))) %>% 
+  # 按组+MIA压缩计算抗菌药物数量和品种信息
+  summarise(
+    count_antibiotics = n(),
+    across(Human:Soil, unique),
+    count_common = do.call(sum, across(Human:Soil)),
+    Antibiotic = case_when(
+      # 最多显示前4个抗菌药物
+      count_antibiotics <= 4 ~ paste(Antibiotic, collapse = ", "),
+      T ~ paste0(paste(Antibiotic[1:4], collapse = ", "), ", ...")),
+    .by = c(MIA, sector_id)) %>% 
+  # 按Human:Animal共存的顺序排列
+  arrange(MIA, across(Human:Soil), -count_antibiotics) %>% 
+  mutate(
+    # 大写首字母，小写其他字母
+    Antibiotic = str_to_sentence(Antibiotic),
+    Antibiotic = factor(Antibiotic, levels = unique(Antibiotic))) %>% 
+  # 转换长数据
+  pivot_longer(cols = Human:Soil) %>%
+  mutate(
+    sector = case_when(
+      name %in% "Human" ~ "Human health",
+      name %in% c("Animal", "Terrestrial", "Aquatic") ~ 
+        "Animal health and food safety",
+      T ~ "Environment"),
+    sector = factor(sector, levels = c(
+      "Human health", "Animal health and food safety", "Environment")),
+    name = factor(name, levels = c(
+      "Human", "Animal", "Terrestrial", "Aquatic", 
+      "Lake", "WasteWater", "Soil"),
+      labels = c(
+        "Human antibiotic use", 
+        "Animal antibiotic use", 
+        "Antibiotic residues in terrestrial products", 
+        "Antibiotic residues in aquatic products", 
+        "Antibiotic residues in lakes", 
+        "Antibiotic residues in wastewater", 
+        "Antibiotic residues in agricultural soils")),
+    # 该领域有数据赋值为抗菌药物数量，无数据赋值为NA
+    value = if_else(value == 1, count_antibiotics, NA),
+    # 对抗菌药物数量设置上下限和白色字体
+    value_mask = if_else(value < 4, NA, value),
+    value_fill = if_else(value > 9, 9, value),
+    value_white = ifelse(value > 4, T, F)) %>% 
+  ggplot(aes(x = name, y = Antibiotic, fill = value_fill)) +
+  geom_tile(colour = "white", linewidth = 0.5) +
+  # geom_text(
+  #   aes(label = value_mask), colour = "white",
+  #   family = "serif") +
+  facet_grid(
+    MIA ~ sector, switch = "y", 
+    labeller = label_wrap_gen(35),
+    scales = "free", space = "free") +
+  scale_x_discrete(
+    expand = c(0, 0),
+    labels = function(x) str_wrap(x, 12)) +
+  scale_y_discrete(
+    position = "right", expand = c(0, 0),
+    labels = function(x) str_wrap(x, 80)) +
+  scale_colour_manual(
+    breaks = c(T, F),
+    values = c("white", "black")) +
+  scale_fill_viridis_c(
+    name = "Numbers of antibiotics",
+    direction = -1,
+    begin = 0.2,
+    option = "D",
+    breaks = seq(1, 10, 2),
+    labels = c(1, 3, 5, 7, "≥9"),
+    na.value = "grey90") +
+  labs(x = "", y = "") +
+  theme_classic() +
+  theme(
+    legend.position = "inside",
+    legend.position.inside = c(1.3, -0.04),
+    legend.background = element_blank(),
+    legend.title.position = "top",
+    legend.direction = "horizontal",
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12),
+    panel.spacing = unit(0.05, "cm"),
+    axis.ticks.x = element_blank(),
+    strip.text.y.left = element_text(angle = 0, size = 13),
+    strip.text.x.top = element_text(size = 10),
+    axis.text.y.right = element_text(size = 10, colour = "black", lineheight = 0.6),
+    axis.text.x.bottom = element_text(size = 12, colour = "black"),
+    text = element_text(family = "serif")) +
+  # theme(axis.text.y = element_blank())
+  guides(
+    colour = "none",
+    fill = guide_colorbar(
+      barheight = unit(0.5, "cm"),
+      barwidth = unit(5, "cm")))
+ggsave("fig_AMU.png", plot = fig_AMU, 
+       width = 13, height = 10, dpi = 500)
