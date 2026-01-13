@@ -1,0 +1,148 @@
+# 3 AMR监测项目重叠 ----
+# 数据合并
+SourceData_AMR <-
+  read_xlsx("AMR监测.xlsx", sheet = 1) %>% 
+  mutate(sector = "Human", .before = 1) %>% 
+  bind_rows(
+    read_xlsx("AMR监测.xlsx", sheet = 2) %>% 
+      mutate(sector = "Farm", .before = 1)) %>% 
+  bind_rows(
+    read_xlsx("AMR监测.xlsx", sheet = 3)[-9] %>% 
+      mutate(sector = "Pet", .before = 1)) %>% 
+  arrange(ATC4, ATC5, antibiotic) %>% 
+  mutate(
+    ATC4 = factor(ATC4, levels = unique(ATC4)),
+    ATC5 = factor(ATC5, levels = unique(ATC5)),
+    antibiotic = factor(antibiotic, levels = unique(antibiotic))) %>% 
+  # WHO priority pathogens
+  mutate(
+    priority = case_when(
+      Species == "Acinetobacter baumannii" &
+        ATC5 == "J01DH" ~ "Critical",
+      Order == "Enterobacterales" &
+        ATC5 %in% c("J01DD", "J01DE", "J01DH") ~ "Critical",
+      Species %in% c("Salmonella spp.", "Shigella spp.") &
+        ATC4 == "J01M" ~ "High",
+      Species == "Pseudomonas aeruginosa" &
+        ATC5 == "J01DH" ~ "High",
+      Species == "Enterococcus faecium" &
+        antibiotic == "Vancomycin" ~ "High",
+      Species == "Staphylococcus aureus" &
+        antibiotic == "Oxacillin" ~ "High",
+      Species == "Streptococcus pneumoniae" &
+        ATC5 == "J01FA" ~ "Medium",
+      Species == "Haemophilus influenzae" &
+        antibiotic == "Ampicillin" ~ "Medium",
+      Species == "Streptococcus pyogenes" &
+        ATC5 == "J01FA" ~ "Medium",
+      Species == "Streptococcus agalactiae" &
+        ATC4 == "J01C" ~ "Medium",
+      T ~ "Not in the list"))
+
+SourceData_AMR %>% 
+  filter(!grepl("spp.", Species)) %>% 
+  distinct(Species) %>% nrow()
+
+# 绘图
+fig_AMR <-
+SourceData_AMR %>% 
+  mutate(
+    # 减少strip
+    ATC4 = gsub("J04A", "J01X", ATC4),
+    orgGroup = gsub("\u00A0", " ", orgGroup, fixed = TRUE),
+    orgGroup = gsub(" spp.", "", orgGroup),
+    orgGroup = gsub("unique", "species", orgGroup),
+    # 避开重叠
+    key = paste0(Species, antibiotic),
+    overlap = key %in% key[duplicated(key)],
+    # 菌株斜体
+    Species = gsub("\u00A0", " ", Species, fixed = TRUE),
+    Species = paste0("*", Species, "*"),
+    Species = gsub(" spp.*", "* spp.", Species),
+    Species = gsub(
+      "*Coagulase-positive ", "Coagulase-positive *", Species, fixed = TRUE),
+    Species = gsub(
+      "*Coagulase-negative ", "Coagulase-negative *", Species, fixed = TRUE)) %>% 
+  # 排序orgGroup
+  mutate(
+    n = n(),
+    .by = c(sector, orgGroup)) %>% 
+  arrange(sector, n) %>% 
+  mutate(
+    orgGroup = factor(orgGroup, levels = c(
+      "Human species", "Klebsiella", "Streptococcus",
+      "Proteus", "Enterobacter", "Acinetobacter",
+      "Pseudomonas", "Escherichia coli","Staphylococcus",
+      "Enterococcus", "Salmonella", "Haemophilus",
+       "Animal species"), 
+      labels = c(
+        "Human species", "*Klebsiella*", "*Streptococcus*",
+        "*Proteus*", "*Enterobacter*", "*Acinetobacter*",
+        "*Pseudomonas*", "*Escherichia coli*","*Staphylococcus*",
+        "*Enterococcus*", "*Salmonella*", "*Haemophilus*",
+        "Animal species")),
+    Species = factor(Species, levels = sort(unique(Species), decreasing = T)),
+    Genus = factor(Genus, levels = unique(Genus)),
+    Family = factor(Family, levels = unique(Family)),
+    Order = factor(Order, levels = unique(Order))) %>% 
+  ggplot(
+    aes(y = Species, x = antibiotic, 
+        fill = sector, colour = priority, shape = priority)) +
+  # 非重叠点
+  geom_point(
+    size = 2, alpha = 0.7, stroke = 0.5,
+    data = . %>% filter(!overlap)) +
+  # 重叠点
+  geom_point(
+    size = 2, alpha = 0.7, stroke = 0.5,
+    position = position_nudge(x = -0.12, y = 0.12),
+    data = . %>% filter(overlap & sector == "Human")) +
+  geom_point(
+    size = 2, alpha = 0.7, stroke = 0.5,
+    position = position_nudge(x = 0.12, y = 0.12),
+    data = . %>% filter(overlap & sector == "Pet")) +
+  geom_point(
+    size = 2, alpha = 0.7, stroke = 0.5,
+    position = position_nudge(y = -0.12),
+    data = . %>% filter(overlap & sector == "Farm")) +
+  facet_grid(
+    orgGroup ~ ATC4, switch = "y",
+    scales = "free", space = "free") +
+  scale_y_discrete(position = "right") +
+  scale_fill_brewer(
+    name = "Sector",
+    breaks = c("Human", "Pet", "Farm"),
+    labels = c("Human", "Companion animal", "Food-producing animal"),
+    palette = "Set1") +
+  scale_color_manual(
+    name = "WHO Bacterial Priority Pathogens",
+    breaks = c("Critical", "High", "Medium", "Not in the list"),
+    values = c(rep("black", 3), "grey80")) +
+  scale_shape_manual(
+    name = "WHO Bacterial Priority Pathogens",
+    breaks = c("Critical", "High", "Medium", "Not in the list"),
+    values = c(23, 22, 24, 21)) +
+  labs(x = "", y = "") +
+  theme_minimal() +
+  theme(
+    legend.position = "bottom",
+    legend.title = element_text(size = 15),
+    legend.text = element_text(size = 12),
+    legend.box = "vertical",
+    legend.box.margin = margin(t = -20),
+    legend.background = element_rect(colour = "black"),
+    axis.text.x = element_text(angle = 45, hjust = 1, size = 8),
+    axis.ticks = element_line(),
+    axis.text.y = ggtext::element_markdown(),
+    strip.text.y.left = ggtext::element_markdown(angle = 0),
+    strip.background = element_rect(colour = "black"),
+    panel.spacing.x = unit(0.05, "cm"),
+    panel.spacing.y = unit(0, "cm"),
+    panel.grid.major = element_line(linewidth = 0.5),
+    plot.background = element_rect(fill = "white", colour = NA),
+    text = element_text(family = "serif")) +
+  guides(
+    shape = guide_legend(override.aes = list(alpha = 1, stroke = 1)),
+    fill = guide_legend(override.aes = list(shape = 21, color = NA)))
+ggsave("fig_AMR.png", plot = fig_AMR,
+       width = 11, height = 9, dpi = 500)
