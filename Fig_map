@@ -1,0 +1,539 @@
+# 1 监测网覆盖情况(2023) ----
+#### 1.1 监测点数据处理 ----
+survey_count <- read_xlsx("国家监测点分布.xlsx", sheet = 1)
+map_count <- 
+  survey_count %>% 
+  summarise(
+    Population = unique(Population), # 万人
+    Agr_value = unique(Agr_value), # 亿元
+    Hospitals = unique(Hospitals), # 个
+    Livestock = unique(Livestock), # 万吨
+    Aquatic = unique(Aquatic), # 万吨
+    area = unique(area), # 万平方千米
+    CentralLab = unique(所在省),
+    CARSS_count = ifelse(length(unique(CARSS))==1, 
+                         unique(CARSS_count), sum(CARSS_count)),
+    CAS_count = ifelse(length(unique(CAS))==1, 
+                       unique(CAS_count), sum(CAS_count)),
+    CFDSS_count = ifelse(length(unique(CFDSS))==1, 
+                         unique(CFDSS_count), sum(CFDSS_count)),
+    animal_count = ifelse(length(unique(动物耐药))==1, 
+                          unique(animal_count), sum(animal_count)),
+    food_count = ifelse(length(unique(禽兽残留))==1, 
+                        unique(food_count), sum(food_count)),
+    sea_count = ifelse(length(unique(水产残留))==1, 
+                       unique(sea_count), sum(sea_count)),
+    .by = name)
+
+#### 1.2 地图数据读取 ----
+china <- 
+  st_read("中华人民共和国.json") %>% 
+  st_transform(crs = '+proj=laea +lat_0=40 +lon_0=104') %>% 
+  full_join(map_count) %>% 
+  mutate(
+    Population = case_when(
+      name == "台湾省" ~ 2358.9, # 万人
+      name == "香港特别行政区" ~ 734.6,
+      name == "澳门特别行政区" ~ 67.7,
+      T ~ Population),
+    Agr_value = case_when(
+      name == "台湾省" ~ 227065*1.41/100*0.22, # 亿元
+      name == "香港特别行政区" ~ 0,
+      name == "澳门特别行政区" ~ 0,
+      T ~ Agr_value),
+    area = case_when(
+      name == "台湾省" ~ 3.6, # 万平方公里
+      name == "香港特别行政区" ~ 0.110634,
+      name == "澳门特别行政区" ~ 0.00328,
+      T ~ area),
+    Pop_density = Population/area # 人/km2
+    )
+
+# WGS84坐标转换
+dots <- unlist(
+  lapply(
+    lapply(
+      lapply(china$center[-35], function(x) st_sfc(st_point(x), crs = 4326)),
+      function(x) st_transform(x, crs = '+proj=laea +lat_0=40 +lon_0=104')),
+    st_coordinates))
+china <- 
+  china %>% 
+  mutate(
+    lon = c(dots[seq(1,68,2)], NA),
+    lat = c(dots[seq(2,68,2)], NA),
+    Lab_lon = case_when(
+      is.na(CentralLab) ~ NA,
+      T ~ lon[match(CentralLab, name)]),
+    Lab_lat = case_when(
+      is.na(CentralLab) ~ NA,
+      T ~ lat[match(CentralLab, name)]))
+
+#### 1.3 底图 ----
+####* 公路铁路 ----
+road_map <- 
+  st_read("road & railway/road/roa_4m.shp", crs = 4326) %>% 
+  st_transform(crs = '+proj=laea +lat_0=40 +lon_0=104')
+railway_map <- 
+  st_read("road & railway/railway/rai_4m.shp", crs = 4326) %>% 
+  st_transform(crs = '+proj=laea +lat_0=40 +lon_0=104')
+
+####* 河流湖泊 ----
+river_map <- 
+  st_read("rivers & lakes/一级河流hyd1_4m/hyd1_4l.shp", crs = 4326) %>% 
+  st_transform(crs = '+proj=laea +lat_0=40 +lon_0=104')
+lake_map <- 
+  st_read("rivers & lakes/中国湖泊/中国湖泊.shp")
+
+####* 医院 ----
+human_fig <-
+  china %>% 
+  ggplot() +
+  geom_sf(
+    aes(fill = Hospitals, geometry = geometry), colour = "grey20") +
+  geom_sf(
+    aes(geometry = geometry), data = railway_map, 
+    colour = "grey90", linewidth = 0.15) +
+  geom_sf(
+    aes(geometry = geometry), data = railway_map, 
+    colour = "grey30", linewidth = 0.15, linetype = "dashed") +
+  scale_fill_gradientn(
+    name = "Total hospitals",
+    breaks = seq(0, 3000, length.out = 6),
+    colours = RColorBrewer::brewer.pal(5, "BuPu"),
+    na.value = "grey70",
+    guide = guide_colorbar(
+      title.position = "top",
+      label.hjust = 0,
+      direction = "horizontal",
+      barwidth = unit(5, "cm"),
+      barheight = unit(0.3, "cm"),
+      reverse = T)) +
+  theme(
+    rect = element_blank(),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    text = element_text(family = "serif"))
+human_mainland <- 
+  human_fig +
+  # 添加比例尺
+  annotation_scale(location='bl') +
+  # 添加指北针
+  annotation_north_arrow(
+    location = 'tl', which_north = 'false',
+    style = north_arrow_fancy_orienteering) +
+  #截取中国地图，不在大图上显示九段线区域
+  coord_sf(
+    ylim = c(-2387082, 1654989), 
+    crs = '+proj=laea +lat_0=40 +lon_0=104')
+human_nine_map <- 
+  human_fig +
+  #截取九段线区域
+  coord_sf(
+    ylim = c(-4028017, -1877844),
+    xlim = c(117131.4, 2115095),
+    crs="+proj=laea +lat_0=40 +lon_0=104")+
+  theme(
+    plot.margin = margin(0,0,0,0),
+    legend.position = "none",
+    aspect.ratio = 1.25, #调节长宽比
+    panel.border = element_rect(fill = NA, color= "grey10"))
+
+####* 肉类产量 ----
+agr_fig <-
+  china %>% 
+  ggplot() +
+  geom_sf(
+    aes(fill = Livestock/10, geometry = geometry), colour = "grey50") +
+  geom_sf(
+    aes(geometry = geometry), data = river_map,
+    colour = "#3D8BFF", linewidth = 0.15) +
+  geom_sf(
+    aes(geometry = geometry), data = lake_map,
+    colour = "#3D8BFF", fill = "#3D8BFF") +
+  scale_fill_gradientn(
+    name = "Output of meat (thousand tons)",
+    breaks = seq(0, 100, length.out = 5),
+    colours = RColorBrewer::brewer.pal(5, "YlGn"),
+    na.value = "grey70",
+    guide = guide_colorbar(
+      title.position = "top",
+      label.hjust = 0,
+      direction = "horizontal",
+      barwidth = unit(5, "cm"),
+      barheight = unit(0.3, "cm"),
+      label.theme = element_text(),
+      reverse = T)) +
+  theme(
+    rect = element_blank(),
+    panel.background = element_blank(),
+    panel.grid = element_blank(),
+    axis.line = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    text = element_text(family = "serif"))
+
+agr_mainland <- 
+  agr_fig +
+  # 添加比例尺
+  annotation_scale(location='bl') +
+  # 添加指北针
+  annotation_north_arrow(
+    location='tl', which_north='false',
+    style=north_arrow_fancy_orienteering) +
+  #截取中国地图，不在大图上显示九段线区域
+  coord_sf(
+    ylim = c(-2387082,1654989), 
+    crs='+proj=laea +lat_0=40 +lon_0=104')
+agr_nine_map <- 
+  agr_fig +
+  #截取九段线区域
+  coord_sf(
+    ylim = c(-4028017, -1877844),
+    xlim = c(117131.4, 2115095),
+    crs = "+proj=laea +lat_0=40 +lon_0=104") +
+  theme(
+    plot.margin = margin(0,0,0,0),
+    legend.position = "none",
+    aspect.ratio = 1.25, #调节长宽比
+    panel.border = element_rect(fill = NA, color= "grey10"))
+
+#### 1.4 散点饼图 ----
+####* 医院数量饼图 ----
+# 分监测网
+human_bar <-
+  china %>% 
+  st_drop_geometry() %>% 
+  select(name, lon, lat, CARSS_count, CAS_count, CFDSS_count) %>% 
+  pivot_longer(
+    cols = ends_with("count"),
+    names_to = "surveillance",
+    values_to = "count") %>% 
+  mutate(
+    width = 40000,
+    lon = case_when(
+      surveillance == "CAS_count" ~ lon - width,
+      surveillance == "CFDSS_count" ~ lon + width,
+      T ~ lon),
+    lon_start = lon - 0.5 * width,
+    lon_end = lon + 0.5 * width,
+    lat_adj = lat + count * 800)
+
+legend_bar <-
+  expand.grid(
+  lon = -2000000, lat = -2150000,
+  count = seq(0, 6, 2)*100) %>% 
+  mutate(
+    width = 80000,
+    lon_start = lon - 0.5 * width,
+    lon_end = lon + 0.5 * width,
+    lat_adj = lat + count * 800,
+    lat = c(lat[1], lat_adj[-4]))
+
+human_pie_plot <-
+human_mainland +
+  new_scale_fill() +
+  geom_rect(
+    aes(xmin = lon_start, xmax = lon_end, 
+        ymin = lat, ymax = lat_adj, fill = surveillance), 
+    alpha = 0.9, 
+    colour = "black", linewidth = 0.15, 
+    data = human_bar) +
+  geom_text(
+    aes(label = count, x = lon, y = lat_adj), 
+    vjust = 0, nudge_y = 5000, 
+    size = 0.9, family = "serif",
+    data = human_bar) +
+  scale_fill_manual(
+    name = "Human surveillance",
+    breaks = c("CAS_count", "CARSS_count", "CFDSS_count"),
+    labels = c(
+      "Center for Antibacterial\nSurveillance (CAS)", 
+      "China Antimicrobial Resistance\nSurveillance System (CARSS)", 
+      "China Fungal Diseases\nSurveillance System (CFDSS)"),
+    values = RColorBrewer::brewer.pal(8, "Accent")[c(4, 6:7)]) +
+  scale_x_continuous(limits = c(-2387082,2600000)) +
+  geom_rect(
+    aes(xmin = lon_start, xmax = lon_end,
+        ymin = lat, ymax = lat_adj),
+    colour = "white", fill = "grey70", linewidth = 0.15,
+    data = legend_bar) +
+  annotate(
+    "rect",
+    colour = "black", fill = "NA", linewidth = 0.15,
+    xmin = legend_bar$lon[1] - 0.5 * 80000, xmax = legend_bar$lon[1] + 0.5 * 80000,
+    ymin = legend_bar$lat_adj[1], ymax = legend_bar$lat_adj[nrow(legend_bar)]) +
+  annotate(
+    "segment",
+    colour = "grey70", linewidth = 1,
+    x = legend_bar$lon[1] - 0.25 * 80000, xend = legend_bar$lon[1] + 0.25 * 80000,
+    y = legend_bar$lat_adj[2], yend = legend_bar$lat_adj[2]) +
+  annotate(
+    "segment",
+    colour = "grey70", linewidth = 1,
+    x = legend_bar$lon[1] - 0.25 * 80000, xend = legend_bar$lon[1] + 0.25 * 80000,
+    y = legend_bar$lat_adj[3], yend = legend_bar$lat_adj[3]) +
+  geom_text(
+    aes(label = count, x = lon_end + 20000, y = lat_adj),
+    hjust = 0, size = 2.2, family = "serif",
+    data = legend_bar) +
+  annotate(
+    "text", x = -2250000, y = -1550000, family = "serif",
+    label = "Participated hospitals", size = 4, hjust = 0)
+
+# 拼图
+Surveillance_Human <- 
+  ggdraw(xlim = c(0,1)) +
+  draw_plot(
+    human_pie_plot +
+      theme(
+        legend.position = c(0.95, 0.5),
+        legend.key.spacing.y = unit(0.1, "cm"),
+        plot.margin = margin(0, 100, 0, 0))) +
+  draw_plot(
+    human_nine_map, 
+    x = 0.72, y = 0, width = 0.14, height = 0.39)
+ggsave("human_surv_pie.png",
+       plot = Surveillance_Human,
+       width = 9.5, height = 7, dpi = 500)
+
+####* 标本数量饼图 ----
+# 分菌株
+animal_species <- 
+  read_xlsx("国家监测点分布.xlsx", sheet = 6) %>% 
+  arrange(-n) %>% 
+  mutate(Species = factor(
+    Species, levels = unique(Species))) %>% 
+  pivot_wider(
+    id_cols = name,
+    names_from = Species,
+    values_from = n,
+    values_fill = 0,
+    values_fn = sum) %>%
+  select(c(1:2, 4, 3, 9, 5:8, 10)) %>% 
+  mutate(n = rowSums(across(2:10))) %>% 
+  full_join(china)
+
+animal_pie_plot <-
+  agr_mainland +
+  new_scale_fill() +
+  geom_scatterpie(
+    aes(x = lon, y = lat, 
+        r = log(n, 10)*30000),
+    size = 0.1, alpha = 0.9,
+    cols = colnames(animal_species)[2:10],
+    data = animal_species) +
+  geom_curve(
+    aes(x = lon, xend = Lab_lon,
+        y = lat, yend = Lab_lat),
+    curvature = 0.1, alpha = 0.5,
+    arrow = arrow(length = unit(0.1, "cm")),
+    colour = "grey20",
+    linewidth = 0.3,
+    data = china %>% 
+      select(lon, lat, Lab_lon, Lab_lat) %>% 
+      na.omit() %>% 
+      filter(lon != Lab_lon)) +
+  geom_scatterpie_legend(
+    log(c(10, 100, 1000), 10) * 30000, n = 3,
+    x = -2000000, y = -1750000, size = 2,
+    labeller = function(x) {round(10**(x/30000),0)}) +
+  annotate(
+    "text", x = -2250000, y = -1550000, family = "serif",
+    label = "Sample size", size = 4, hjust = 0) +
+  scale_fill_brewer(
+    name = "Animal Surveillance",
+    palette = "Set1") +
+  scale_x_continuous(limits = c(-2387082,2600000))
+
+# 拼图
+Surveillance_Animal <-
+  ggdraw(xlim = c(0,1)) +
+  draw_plot(
+    animal_pie_plot + 
+      theme(
+        legend.position = c(1.05, 0.58),
+        # legend.text = element_text(face = "italic"),
+        plot.margin = margin(0, 100, 0, 0))) +
+  draw_plot(
+    agr_nine_map, 
+    x = 0.72, y = 0, width = 0.14, height = 0.39)
+ggsave("Animal_surv_pie.png",
+       plot = Surveillance_Animal,
+       width = 9.5, height = 7, dpi = 500)
+
+#### 1.5 拼图 ----
+ggsave(
+  "SurveillanceCoverage.pdf",
+  plot = plot_grid(
+    Surveillance_Human +
+      theme(plot.margin = margin(20, 15, 5, 20)),
+    Surveillance_Animal +
+      theme(plot.margin = margin(20, 15, 5, 20)),
+    ncol = 1,
+    labels = c("A", "B"),
+    label_size = 35, 
+    label_fontface = "bold",
+    label_fontfamily = "serif"),
+  width = 10, height = 15, dpi = 500)
+
+# 2 AMU监测项目重叠 ----
+#### 2.1 多领域(ATC分级) ----
+####* 数据读取 ----
+AMU_residue <- 
+  read_xlsx("AMU监测.xlsx", sheet = 8) %>% 
+  select(-1:-9) %>% 
+  filter(!is.na(Antibiotic)) %>% 
+  mutate(
+    across(
+      c(Human:Soil), ~ if_else(is.na(.x), F, T)),
+    ATC4 = if_else(substr(ATC4, 1, 3) == "J01", ATC4, "Others"),
+    ATC5 = if_else(substr(ATC5, 1, 3) == "J01", ATC5, "Others")) %>% 
+  arrange(ATC4, Human, Animal, Terrestrial, Aquatic, Lake, WasteWater, Soil, Antibiotic)
+
+AMU_residue2 %>% 
+  summarise(across(Human:Soil, sum))
+AMU_residue2 %>% 
+  # filter(Lake | WasteWater | Soil) %>%
+  filter(Human & Animal) %>% View()
+  # filter(Human & (Lake | WasteWater | Soil)) %>%
+  summarise(n = n())
+
+AMU_residue %>% 
+  summarise(across(Human:Soil, sum), 
+            .by = ATC4)
+
+####* 绘图 ----
+AMU_residue %>% 
+  # 从上到下所有sector相同时压缩为一组
+  mutate(
+    sector_id = do.call(paste0, across(Human:Soil))) %>% 
+  # 按组+ATC压缩计算抗菌药物数量和品种信息
+  summarise(
+    across(Human:Soil, unique),
+    count_common = do.call(sum, across(Human:Soil)),
+    count_antibiotics = n(),
+    Antibiotic = case_when(
+      # 最多显示前8个抗菌药物
+      count_antibiotics < 8 ~ paste(Antibiotic, collapse = ", "),
+      T ~ paste0(paste(Antibiotic[1:7], collapse = ", "), ", ...")),
+    .by = c(ATC4, sector_id)) %>% 
+  # 将一组中占sector多的和ATC中品种数量多的排在上面
+  arrange(ATC4, count_common, -count_antibiotics, 
+          across(Human:Soil)) %>% 
+  mutate(
+    # 大写首字母，小写其他字母
+    Antibiotic = str_to_sentence(Antibiotic),
+    Antibiotic = factor(Antibiotic, levels = unique(Antibiotic))) %>% 
+  # 转换长数据
+  pivot_longer(cols = Human:Soil) %>%
+  mutate(
+    sector = case_when(
+      name %in% "Human" ~ "Human health",
+      name %in% c("Animal", "Terrestrial", "Aquatic") ~ 
+        "Animal health and food safety",
+      T ~ "Environment"),
+    sector = factor(sector, levels = c(
+      "Human health", "Animal health and food safety", "Environment")),
+    name = factor(name, levels = c(
+      "Human", "Animal", "Terrestrial", "Aquatic", 
+      "Lake", "WasteWater", "Soil"),
+      labels = c(
+        "Human antibiotic use", 
+        "Animal antibiotic use", 
+        "Antibiotic residues in terrestrial products", 
+        "Antibiotic residues in aquatic products", 
+        "Antibiotic residues in lakes", 
+        "Antibiotic residues in wastewater", 
+        "Antibiotic residues in agricultural soils")),
+    # 该领域有数据赋值为抗菌药物数量，无数据赋值为NA
+    value = if_else(value, count_antibiotics, NA),
+    # 对抗菌药物数量设置上下限和白色字体
+    value_mask = if_else(value < 2, NA, value),
+    value_fill = if_else(value > 9, 9, value),
+    value_white = ifelse(value > 4, T, F)) %>%
+  ggplot(aes(x = name, y = Antibiotic, fill = value_fill)) +
+  geom_tile(colour = "white", linewidth = 1) +
+  # geom_text(
+  #   aes(label = value_mask, colour = value_white), 
+  #   family = "serif") +
+  facet_grid(
+    ATC4 ~ sector, switch = "y", 
+    scales = "free", space = "free") +
+  scale_x_discrete(
+    expand = c(0, 0),
+    labels = function(x) str_wrap(x, 12)) +
+  scale_y_discrete(
+    position = "right", expand = c(0, 0),
+    labels = function(x) str_wrap(x, 80)) +
+  scale_colour_manual(
+    breaks = c(T, F),
+    values = c("white", "black")) +
+  scale_fill_viridis_c(
+    name = "Numbers of antibiotics",
+    direction = -1,
+    begin = 0.2,
+    option = "D",
+    breaks = seq(1, 10, 2),
+    labels = c(1, 3, 5, 7, "≥9"),
+    na.value = "grey90") +
+  labs(x = "", y = "") +
+  theme_classic() +
+  theme(
+    legend.position = "inside",
+    legend.position.inside = c(1.4, -0.03),
+    legend.title.position = "top",
+    legend.direction = "horizontal",
+    legend.title = element_text(size = 14),
+    legend.text = element_text(size = 12),
+    axis.ticks.x = element_blank(),
+    strip.text.y.left = element_text(angle = 0, size = 12),
+    strip.text.x.top = element_text(size = 10),
+    axis.text.y.right = element_text(
+      size = 9, colour = "black", lineheight = 0.6),
+    axis.text.x.bottom = element_text(size = 11, colour = "black"),
+    text = element_text(family = "serif")) +
+  guides(
+    colour = "none",
+    fill = guide_colorbar(
+      barheight = unit(0.5, "cm"),
+      barwidth = unit(5, "cm")))
+ggsave("1.png", width = 11, height = 15, dpi = 500)
+
+####* 数据导出 ----
+AMU_residue %>% 
+  pivot_longer(cols = Human:Soil) %>%
+  mutate(
+    sector = case_when(
+      name %in% "Human" ~ "Human health",
+      name %in% c("Animal", "Terrestrial", "Aquatic") ~ 
+        "Animal health and food safety",
+      T ~ "Environment"),
+    sector = factor(sector, levels = c(
+      "Human health", "Animal health and food safety", "Environment")),
+    name = factor(name, levels = c(
+      "Human", "Animal", "Terrestrial", "Aquatic", 
+      "Lake", "WasteWater", "Soil"),
+      labels = c(
+        "Human antibiotic use", 
+        "Animal antibiotic use", 
+        "Antibiotic residues in terrestrial products", 
+        "Antibiotic residues in aquatic products", 
+        "Antibiotic residues in lakes", 
+        "Antibiotic residues in wastewater", 
+        "Antibiotic residues in agricultural soils")),
+    name2 = paste0(sector, ": ", name)) %>% 
+  filter(value) %>%
+  pivot_wider(
+    id_cols = ATC4,
+    names_from = name2,
+    values_from = Antibiotic,
+    values_fill = "None",
+    values_fn = function(x) Hmisc::capitalize(
+      paste(tolower(x), collapse = ", "))) %>% 
+  select(1:2, starts_with(c("Human", "Animal", "Environment"))) %>% 
+  write.csv("各领域抗菌药物监测具体种类.csv", row.names = F)
